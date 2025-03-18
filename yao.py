@@ -10,9 +10,11 @@ import math
 @torch.compile
 def zeropower_via_newtonschulz5(G, steps):
     """
-    Newton-Schulz iteration to compute the zeroth power / orthogonalization of G. We opt to use a
-    quintic iteration whose coefficients are selected to maximize the slope at zero. For the purpose
-    of minimizing steps, it turns out to be empirically effective to keep increasing the slope at
+    Newton-Schulz iteration to compute the zeroth power / orthogonalization of G.
+    Specifically it views the shorter dimension as 'column' and ensure orthogonality of column vector space, before transposing it back. 
+    
+    We opt to use a quintic iteration whose coefficients are selected to maximize the slope at zero. 
+    For the purpose of minimizing steps, it turns out to be empirically effective to keep increasing the slope at
     zero even beyond the point where the iteration no longer converges all the way to one everywhere
     on the interval. This iteration therefore does not produce UV^T but rather something like US'V^T
     where S' is diagonal with S_{ii}' ~ Uniform(0.5, 1.5), which turns out not to hurt model
@@ -60,7 +62,7 @@ class ARG(torch.optim.Optimizer):
         argm_params=None,
         momentum=0.95,
         nesterov=True,
-        ns_steps=5,
+        ns_steps=3,
         adamw_betas=(0.95, 0.95),
         adamw_eps=1e-8,
     ):
@@ -88,11 +90,9 @@ class ARG(torch.optim.Optimizer):
                 
         # initialize max_loss
         self.max_loss = None
-        self.ns_steps = 3
+        self.ns_steps = ns_steps
         
-    # Question regarding accumulated momentum: is it accumulated across 'step' function calls ? 
-    # -- If so, we can accumulate max_loss across steps, but we need to input loss inside too? 
-    def step(self, loss, closure=None): 
+    def step(self, current_loss, closure=None): 
         
         loss = None 
         if closure is not None: 
@@ -100,7 +100,7 @@ class ARG(torch.optim.Optimizer):
                 loss = closure() 
                 
         # calculate rank and update max loss
-        rank, self.max_loss = calculate_rank(loss, self.max_loss)
+        rank, self.max_loss = calculate_rank(current_loss, self.max_loss)
             
         for group in self.param_groups: 
             
@@ -126,7 +126,7 @@ class ARG(torch.optim.Optimizer):
                     state["moment1_s"] = torch.zeros(rank)
                     state["moment2_s"] = torch.zeros(rank)
                 
-                U, S, V = torch.svd_lowrank(loss, max_loss=None, q=rank, niter=2)
+                U, S, V = torch.svd_lowrank(g, max_loss=None, q=rank, niter=2)
                 
                 state["step"] += 1 
                 step = state["step"]
