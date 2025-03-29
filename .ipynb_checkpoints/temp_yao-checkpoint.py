@@ -55,7 +55,8 @@ def calculate_rank(loss, max_loss=None, max_rank: int = 8, min_rank: int = 1):
     if not max_loss: 
         max_loss = loss.item() 
     ratio = loss.item() / max_loss
-    return max(min_rank, int(ratio * max_rank)), max_loss
+    new_rank = max(min_rank, int(ratio * max_rank))
+    return new_rank
 
 
 def to_shape(t): 
@@ -97,6 +98,7 @@ class YAO(torch.optim.Optimizer):
 
         # --- Global Step: Adjust Rank & Project Momentum ---
         if self.global_step_counter % self.local_steps == 0:
+            print(":: Global Step ::")
             self._global_step(current_loss)
 
         # --- Local Step: Normal Optimization (Fixed Rank) ---
@@ -115,7 +117,9 @@ class YAO(torch.optim.Optimizer):
             self.max_loss = current_loss
         else:
             self.max_loss = max(self.max_loss, current_loss)
-        new_rank = self._calculate_rank(current_loss, self.max_loss)
+
+        # Makes no sense, AI generated code ...
+        # new_rank = calculate_rank(current_loss, self.max_loss, 100)
 
         for group in self.param_groups:
             for p in group["params"]:
@@ -126,6 +130,9 @@ class YAO(torch.optim.Optimizer):
                 if "moment1_u" not in state:
                     continue  # Not initialized yet
 
+                # Adaptive rank for each parameter
+                new_rank = calculate_rank(current_loss, self.max_loss, max_rank=min(p.shape))
+                
                 # Get current rank and buffers
                 current_rank = state["moment1_u"].shape[1]
                 if new_rank == current_rank:
@@ -214,21 +221,11 @@ class YAO(torch.optim.Optimizer):
                 p.data.mul_(1 - lr * weight_decay)
                 p.data.add_(g, alpha=-lr / scale)
 
-    def _calculate_rank(self, current_loss, max_loss):
-        """Heuristic to determine rank based on loss ratio."""
-        loss_ratio = current_loss / max_loss
-        max_possible_rank = 100  # Example: Adjust based on your needs
-        return max(1, int(max_possible_rank * loss_ratio))
 
     def _adjust_rank(self, tensor, new_rank):
         """Pad or truncate a tensor along its last dimension to match new_rank."""
-        if tensor.dim() == 1:  # For singular values (1D)
-            if new_rank > tensor.shape[0]:
-                return torch.cat([tensor, torch.zeros(new_rank - tensor.shape[0])])
-            else:
-                return tensor[:new_rank]
-        else:  # For U/V matrices (2D)
-            if new_rank > tensor.shape[1]:
-                return torch.cat([tensor, torch.zeros(*tensor.shape[:-1], new_rank - tensor.shape[1])], dim=-1)
-            else:
-                return tensor[:, :new_rank]
+        assert tensor.dim() == 2, "adjust rank only supports 2D parameter"
+        if new_rank > tensor.shape[1]:
+            return torch.cat([tensor, torch.zeros(*tensor.shape[:-1], new_rank - tensor.shape[1])], dim=-1)
+        else:
+            return tensor[:, :new_rank]
