@@ -2,10 +2,8 @@ import torch
 import math 
 
 # Adam-like optimizer are pretty simple
-
-# Traditional Optimizer assumes 'gradient' and 'parameter' are fixed
-# - Our idea combines 'wrapping low-rank adaptor' and call .backward() with optimization gadegts together 
-# - in terms of code this is not just a custom optimizer, there needs to be another functionality happening before the .backward() functional .... 
+# - Missing :: Randomized Parameter Groups
+# - Included:: Adaptive low-rank optimization & Geometric normalization
 
 @torch.compile
 def zeropower_via_newtonschulz5(G, steps):
@@ -118,9 +116,6 @@ class YAO(torch.optim.Optimizer):
         else:
             self.max_loss = max(self.max_loss, current_loss)
 
-        # Makes no sense, AI generated code ...
-        # new_rank = calculate_rank(current_loss, self.max_loss, 100)
-
         for group in self.param_groups:
             for p in group["params"]:
                 if not self.state[p]["use_arg"]:
@@ -174,9 +169,6 @@ class YAO(torch.optim.Optimizer):
                 
                 # Update momentum buffers
                 state["step"] += 1
-                
-                # _beta1 = torch.tensor(beta1, dtype=torch.bfloat16)
-                # _beta2 = torch.tensor(beta2, dtype=torch.bfloat16)
 
                 state["moment1_u"].lerp_(U, 1 - beta1)
                 state["moment1_v"].lerp_(V, 1 - beta1)
@@ -224,8 +216,13 @@ class YAO(torch.optim.Optimizer):
 
     def _adjust_rank(self, tensor, new_rank):
         """Pad or truncate a tensor along its last dimension to match new_rank."""
-        assert tensor.dim() == 2, "adjust rank only supports 2D parameter"
-        if new_rank > tensor.shape[1]:
-            return torch.cat([tensor, torch.zeros(*tensor.shape[:-1], new_rank - tensor.shape[1])], dim=-1)
-        else:
-            return tensor[:, :new_rank]
+        if tensor.dim() == 1:  # For singular values (1D)
+            if new_rank > tensor.shape[0]:
+                return torch.cat([tensor, torch.zeros(new_rank - tensor.shape[0])])
+            else:
+                return tensor[:new_rank]
+        else:  # For U/V matrices (2D)
+            if new_rank > tensor.shape[1]:
+                return torch.cat([tensor, torch.zeros(*tensor.shape[:-1], new_rank - tensor.shape[1])], dim=-1)
+            else:
+                return tensor[:, :new_rank]
